@@ -1,0 +1,43 @@
+}
+
+.kutu{
+	border:2px solid black;
+	max-width:860px;
+	width:90%;
+	min-height:220px;
+	margin:80px auto;
+	border-radius:8px;
+	background-color:gray;
+	padding:22px;
+	box-sizing:border-box;
+}
+
+input{
+	display:block;
+	margin:0 auto;
+	border-radius:7px;
+	height:28px;
+	padding:4px 8px;
+}
+
+h3{
+	text-align:center;
+	margin:0 0 12px 0;
+}
+
+button{
+	display:block;
+	margin:12px auto 0 auto;
+	border-radius:8px;
+	padding:6px 14px;
+}
+
+#resultContainer{
+	margin-top:12px;
+	background: #fff6f6;
+	padding:8px;
+	border-radius:6px;
+	max-height:420px;
+	overflow:auto;
+	box-sizing:border-box;
+}
