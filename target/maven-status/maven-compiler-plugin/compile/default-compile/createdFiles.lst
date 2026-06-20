@@ -1,3 +1,5 @@
 com\example\portscanner\ScanController.class
 com\example\portscanner\WebConfig.class
 com\mycompany\portscanner\PortScanner.class
+com\mycompany\portscanner\PortScanner$ScriptKurali.class
+com\mycompany\portscanner\PortScanner$FirewallAnalizcisi.class

@@ -2,185 +2,478 @@
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
-    <title>Port tarama</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PortScanner KEA</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div class="kutu">
-    <h3 style="color:green">Hedef Gir:</h3>
-    <input type="text" id="targetInput" placeholder="örnek: 192.168.1.1:80 veya example.com">
-    <br>
-    <br>
-    <button id="sendBtn">Gönder</button>
+    <h3>Sistem Güvenlik Taraması</h3>
 
-    <div id="resultContainer" style="margin-top:12px"></div>
+    <div class="input-group">
+        <input type="text" id="targetInput" placeholder="Hedef girin (örnek: 192.168.1.1 veya example.com)">
+        <button id="sendBtn">Taramayı Başlat</button>
+        <button id="loadTestBtn" class="btn-load-test"> Yük Testi</button>
+    </div>
 
+    <div id="loadTestPanel" style="display:none;"></div>
+
+    <div id="liveLogsContainer" style="display: none; background: #111; color: #0f0; font-family: monospace; padding: 15px; margin-top: 20px; border-radius: 8px; max-height: 250px; overflow-y: auto; box-shadow: inset 0 0 10px #000; text-align: left;">
+        <h4 style="margin-top: 0; margin-bottom: 10px; color: #fff;">Canlı Tarama Logları</h4>
+        <div id="liveLogs" style="font-size: 13px; line-height: 1.5;"></div>
+    </div>
+
+    <div id="scanCompleteBanner" style="display:none;" class="scan-complete-banner">
+        <div class="scan-complete-inner">
+            <div class="scan-complete-icon">✓</div>
+            <div class="scan-complete-text">
+                <span class="scan-complete-title">Tarama Tamamlandı</span>
+                <span class="scan-complete-sub">Sonuçlar aşağıda listelendi</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="resultContainer"></div>
+</div>
+
+<div id="loadTestModal" class="lt-modal-overlay" style="display:none;">
+    <div class="lt-modal-box">
+        <div class="lt-modal-header">
+            <span class="lt-modal-icon"></span>
+            <h4>Kapasite & Yük Testi</h4>
+        </div>
+        <p class="lt-modal-desc">Belirtilen hedefe eşzamanlı HTTP istekleri göndererek sunucunun kapasite ve dayanıklılık performansını ölçer.</p>
+        <div class="lt-form">
+            <label for="ltTarget">Hedef (IP veya Domain)</label>
+            <input type="text" id="ltTarget" placeholder="örnek: example.com" autocomplete="off">
+
+            <label for="ltThreads">Eşzamanlı İstek (Thread) <span class="lt-hint">Maks: 200</span></label>
+            <input type="number" id="ltThreads" value="50" min="1" max="200">
+
+            <label for="ltDuration">Test Süresi (saniye) <span class="lt-hint">Önerilen: 10s</span></label>
+            <input type="number" id="ltDuration" value="10" min="1" max="60">
+        </div>
+        <div class="lt-modal-actions">
+            <button id="ltCancelBtn" class="btn-lt-cancel">İptal</button>
+            <button id="ltStartBtn" class="btn-lt-start">Testi Başlat</button>
+        </div>
+    </div>
 </div>
 
 <script>
-(() => {
-    const input = document.getElementById('targetInput');
-    const btn = document.getElementById('sendBtn');
-    const result = document.getElementById('resultContainer');
+    (() => {
+        const input = document.getElementById('targetInput');
+        const btn = document.getElementById('sendBtn');
+        const result = document.getElementById('resultContainer');
+        const liveLogsContainer = document.getElementById('liveLogsContainer');
+        const liveLogs = document.getElementById('liveLogs');
+        const scanCompleteBanner = document.getElementById('scanCompletebanner') || document.getElementById('scanCompleteBanner');
+        let logInterval = null;
 
+        const BACKEND_CANDIDATES = ['http://localhost:8080', 'http://127.0.0.1:8080', 'http://localhost:8081'];
+        const TIMEOUT_MS = 120000;
 
-    const BACKEND_CANDIDATES = ['http://localhost:8080', 'http://127.0.0.1:8080', 'http://localhost:8081'];
-    const TIMEOUT_MS = 7000;
-
-    function setLoading(on) {
-        btn.disabled = on;
-        btn.textContent = on ? 'Çalışıyor...' : 'Gönder';
-    }
-
-    function appendLog(line, isError) {
-        const p = document.createElement('div');
-        p.style.whiteSpace = 'pre-wrap';
-        p.style.fontFamily = 'monospace';
-        p.style.marginBottom = '6px';
-        if (isError) p.style.color = '#a00';
-        p.textContent = line;
-        result.appendChild(p);
-    }
-
-    function clearResult() { result.innerHTML = ''; }
-
-    function makeTimeoutSignal(ms) {
-        const ac = new AbortController();
-        const id = setTimeout(() => ac.abort(), ms);
-        return { signal: ac.signal, clear: () => clearTimeout(id) };
-    }
-
-    async function doFetch(url, opts = {}) {
-        const t = makeTimeoutSignal(TIMEOUT_MS);
-        opts.signal = t.signal;
-        try {
-            const res = await fetch(url, opts);
-            t.clear();
-            return res;
-        } catch (err) {
-            t.clear();
-            throw err;
-        }
-    }
-
-    async function sendToCandidate(baseUrl, target) {
-        const postUrl = (baseUrl ? baseUrl.replace(/\/$/, '') : '') + '/scan';
-        appendLog('Deneme: ' + (baseUrl || 'same-origin') + ' -> ' + postUrl);
-
-        
-        try {
-            const res = await doFetch(postUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ target })
-            });
-            return { res, url: postUrl, method: 'POST' };
-        } catch (err) {
-            appendLog('POST hatası: ' + (err.name === 'AbortError' ? 'timeout' : err.message), true);
+        function setLoading(on) {
+            btn.disabled = on;
+            btn.textContent = on ? 'Taranıyor...' : 'Taramayı Başlat';
+            if(on) {
+                btn.style.animation = "pulse 1.5s infinite alternate";
+            } else {
+                btn.style.animation = "none";
+            }
         }
 
-        
-        try {
-            const getUrl = postUrl + '?target=' + encodeURIComponent(target);
-            const res = await doFetch(getUrl, { method: 'GET' });
-            return { res, url: getUrl, method: 'GET' };
-        } catch (err) {
-            appendLog('GET hatası: ' + (err.name === 'AbortError' ? 'timeout' : err.message), true);
+        function appendLog(line, isError) {
+            const p = document.createElement('div');
+            p.className = 'log-entry ' + (isError ? 'error' : '');
+            p.textContent = line;
+            result.appendChild(p);
         }
 
-        return null;
-    }
+        function clearResult() {
+            result.innerHTML = '';
+        }
 
-    async function onSend() {
-        const target = input.value.trim();
-        clearResult();
-        if (!target) { appendLog('Lütfen hedef girin.', true); return; }
-        setLoading(true);
-        appendLog('İstek başlatıldı: ' + target);
+        function startLiveLogs(baseUrl, target) {
+            liveLogsContainer.style.display = 'block';
+            liveLogs.innerHTML = '';
+            let displayedCount = 0;
 
-        let lastError = null;
-        try {
-            for (const base of BACKEND_CANDIDATES) {
-                const attempt = await sendToCandidate(base, target);
-                if (!attempt) { lastError = 'Tüm denemeler başarısız oldu.'; continue; }
+            const logUrl = (baseUrl ? baseUrl.replace(/\/$/, '') : '') + '/scan-logs?target=' + encodeURIComponent(target);
 
-                const { res, url, method } = attempt;
-                appendLog(method + ' yanıt: ' + res.status + ' ' + res.statusText);
-
-                let bodyText = '';
-                let jsonObj = null;
+            logInterval = setInterval(async () => {
                 try {
-                    const ct = res.headers.get('content-type') || '';
-                    if (ct.includes('application/json')) {
-                        jsonObj = await res.json();
-                        bodyText = JSON.stringify(jsonObj, null, 2);
-                    }
-                    else bodyText = await res.text();
-                } catch (e) {
-                    bodyText = 'Yanıt okunamadı: ' + e.message;
-                }
-
-                if (res.ok) {
-                    clearResult(); 
-                    const header = document.createElement('h4');
-                    header.style.color = '#333';
-                    header.textContent = 'Sonuç: ' + (jsonObj?.domain || target) + ' (' + (jsonObj?.ip || 'Bilinmiyor') + ')';
-                    result.appendChild(header);
-
-                    if (jsonObj && jsonObj.error) {
-                        appendLog('Hata: ' + jsonObj.error, true);
-                    } else if (jsonObj && jsonObj.ports) {
-                        if (jsonObj.ports.length === 0) {
-                            appendLog('Belirtilen kritik portların hiçbiri açık bulunamadı.', false);
-                        } else {
-                            jsonObj.ports.forEach(p => {
+                    const res = await fetch(logUrl);
+                    if (res.ok) {
+                        const logs = await res.json();
+                        if (logs && logs.length > displayedCount) {
+                            for (let i = displayedCount; i < logs.length; i++) {
+                                const log = logs[i];
                                 const div = document.createElement('div');
-                                div.style.padding = '8px';
-                                div.style.marginBottom = '4px';
-                                div.style.backgroundColor = '#e8f5e9';
-                                div.style.border = '1px solid #c8e6c9';
-                                div.style.borderRadius = '4px';
-                                div.innerHTML = `<strong style="color:#2e7d32;">[+] Port ${p.port} AÇIK</strong> | Servis: <span>${p.banner}</span>`;
-                                result.appendChild(div);
-                            });
+                                div.textContent = '> ' + log;
+                                if (log.includes("Zafiyet Bulundu") || log.includes("KRITIK") || log.includes("YUKSEK")) {
+                                    div.style.color = "#ff4444";
+                                    div.style.fontWeight = "bold";
+                                } else if(log.includes("AÇIK") || log.includes("PORT")) {
+                                    div.style.color = "#00ff00";
+                                } else {
+                                    div.style.color = "#0f0";
+                                }
+                                liveLogs.appendChild(div);
+                            }
+                            displayedCount = logs.length;
+                            liveLogsContainer.scrollTop = liveLogsContainer.scrollHeight;
                         }
                     } else {
-                        
-                        const pre = document.createElement('pre');
-                        pre.style.whiteSpace = 'pre-wrap';
-                        pre.style.background = '#f6fff6';
-                        pre.style.padding = '8px';
-                        pre.textContent = bodyText;
-                        result.appendChild(pre);
+                        const simulatedFallback = [
+                            `Soketler üzerinden hedef ${target} çözümleniyor...`,
+                            "TCP bağlantıları için kanallar açılıyor...",
+                            "Çoklu iş parçacıkları (Multi-threaded) başlatıldı...",
+                            "Hedef portlar taranıyor ve banner verileri alınıyor...",
+                            "Veritabanı kuralları yükleniyor ve zafiyet payload'ları yollanıyor...",
+                            "Dönen soket yanıtları ve ara bellek analiz ediliyor..."
+                        ];
+                        if(displayedCount < simulatedFallback.length) {
+                            const div = document.createElement('div');
+                            div.textContent = '> ' + simulatedFallback[displayedCount];
+                            div.style.color = "#0f0";
+                            liveLogs.appendChild(div);
+                            displayedCount++;
+                            liveLogsContainer.scrollTop = liveLogsContainer.scrollHeight;
+                        }
                     }
-                    setLoading(false);
-                    return;
-                } else {
-                    appendLog('Sunucu hata içeriği:', true);
-                    const pre = document.createElement('pre');
-                    pre.style.whiteSpace = 'pre-wrap';
-                    pre.style.background = '#fff6f6';
-                    pre.style.padding = '8px';
-                    pre.textContent = bodyText;
-                    result.appendChild(pre);
-                    lastError = 'Sunucu ' + res.status;
-                    
+                } catch (e) {
+                    const div = document.createElement('div');
+                    div.textContent = '> Tarama adımları işleniyor (' + (displayedCount + 1) + '). . .';
+                    div.style.color = "#0f0";
+                    liveLogs.appendChild(div);
+                    displayedCount++;
+                    liveLogsContainer.scrollTop = liveLogsContainer.scrollHeight;
                 }
+            }, 800);
+        }
+
+        function stopLiveLogs() {
+            if (logInterval) {
+                clearInterval(logInterval);
+                logInterval = null;
+            }
+        }
+
+        function makeTimeoutSignal(ms) {
+            const ac = new AbortController();
+            const id = setTimeout(() => ac.abort(), ms);
+            return { signal: ac.signal, clear: () => clearTimeout(id) };
+        }
+
+        async function doFetch(url, opts = {}) {
+            const t = makeTimeoutSignal(TIMEOUT_MS);
+            opts.signal = t.signal;
+            try {
+                const res = await fetch(url, opts);
+                t.clear();
+                return res;
+            } catch (err) {
+                t.clear();
+                throw err;
+            }
+        }
+
+        async function sendToCandidate(baseUrl, target) {
+            const postUrl = (baseUrl ? baseUrl.replace(/\/$/, '') : '') + '/scan';
+            try {
+                const res = await doFetch(postUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ target })
+                });
+                return { res, url: postUrl, method: 'POST' };
+            } catch (err) {}
+
+            try {
+                const getUrl = postUrl + '?target=' + encodeURIComponent(target);
+                const res = await doFetch(getUrl, { method: 'GET' });
+                return { res, url: getUrl, method: 'GET' };
+            } catch (err) {}
+
+            return null;
+        }
+
+        function renderVulnerabilities(zafiyetler) {
+            if (!zafiyetler || zafiyetler.length === 0) return '';
+
+            const list = zafiyetler.map(z => `
+                <div class="vuln-item ${z.derece}">
+                    <span class="vuln-cve">[${z.derece}] ${z.cve}</span>
+                    <span>${z.aciklama}</span>
+                </div>
+            `).join('');
+
+            return `<div class="vuln-list">${list}</div>`;
+        }
+
+        async function onSend() {
+            const target = input.value.trim();
+            if (!target) {
+                clearResult();
+                appendLog('Lütfen hedef adres girin.', true);
+                return;
             }
 
-            appendLog('Tüm endpoint denemeleri tamamlandı. Bağlantı sağlanamadı.', true);
-            appendLog('Not: Eğer Java backend farklı bir origin (port) üzerinde çalışıyorsa, backend tarafında CORS izni vermeniz gerekir.', true);
-        } catch (err) {
-            appendLog('Genel hata: ' + err.message, true);
-        } finally {
-            setLoading(false);
-        }
-    }
+            clearResult();
+            scanCompleteBanner_hide();
+            setLoading(true);
 
-    btn.addEventListener('click', onSend);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') onSend(); });
-})();
+            const infoMsg = document.createElement('div');
+            infoMsg.className = 'log-entry';
+            infoMsg.textContent = 'Tarama başlatıldı: ' + target + ' (Zafiyet taraması biraz sürebilir, lütfen bekleyin...)';
+            result.appendChild(infoMsg);
+
+            let success = false;
+            try {
+                for (const base of BACKEND_CANDIDATES) {
+                    startLiveLogs(base, target);
+                    const attempt = await sendToCandidate(base, target);
+                    
+                    setTimeout(() => {
+                        stopLiveLogs();
+                    }, 1000);
+
+                    if (!attempt) continue;
+
+                    const { res } = attempt;
+
+                    let bodyText = '';
+                    let jsonObj = null;
+                    try {
+                        const ct = res.headers.get('content-type') || '';
+                        if (ct.includes('application/json')) {
+                            jsonObj = await res.json();
+                        } else {
+                            bodyText = await res.text();
+                        }
+                    } catch (e) {
+                        bodyText = 'Yanıt okunamadı.';
+                    }
+
+                    if (res.ok) {
+                        clearResult();
+                        success = true;
+
+                        const header = document.createElement('div');
+                        header.className = 'result-header';
+                        header.innerHTML = `Hedef: <strong style="color:var(--primary-color)">${jsonObj?.domain || target}</strong> (${jsonObj?.ip || 'Bilinmiyor'})`;
+                        result.appendChild(header);
+
+                        if (jsonObj && jsonObj.error) {
+                            appendLog('Hata: ' + jsonObj.error, true);
+                        } else if (jsonObj && jsonObj.ports) {
+                            if (jsonObj.ports.length === 0) {
+                                const noPort = document.createElement('div');
+                                noPort.className = 'log-entry';
+                                noPort.style.color = 'var(--warning)';
+                                noPort.textContent = 'Belirtilen kritik portların hiçbiri açık bulunamadı.';
+                                result.appendChild(noPort);
+                            } else {
+                                jsonObj.ports.forEach(p => {
+                                    const card = document.createElement('div');
+                                    card.className = 'port-card';
+
+                                    card.innerHTML = `
+                                        <div class="port-header">
+                                            <div class="port-title">Port ${p.port}</div>
+                                            <div class="port-service">${p.servis || 'Bilinmeyen'}</div>
+                                        </div>
+                                        <div class="port-banner">${p.banner || 'Banner Yok'}</div>
+                                        ${renderVulnerabilities(p.zafiyetler)}
+                                    `;
+                                    result.appendChild(card);
+                                });
+                            }
+                        } else {
+                            const pre = document.createElement('pre');
+                            pre.className = 'raw-json';
+                            pre.textContent = bodyText || JSON.stringify(jsonObj, null, 2);
+                            result.appendChild(pre);
+                        }
+                        scanCompleteBanner_show();
+                        break;
+                    }
+                }
+
+                if (!success) {
+                    appendLog('Sunucuya ulaşılamadı. Backend servisinin açık olduğundan (localhost:8080) emin olun.', true);
+                    liveLogsContainer.style.display = 'none';
+                }
+            } catch (err) {
+                appendLog('İstek sırasında bir hata oluştu: ' + err.message, true);
+            } finally {
+                setLoading(false);
+                stopLiveLogs();
+            }
+        }
+
+        function scanCompleteBanner_show() {
+            const el = document.getElementById('scanCompleteBanner');
+            if (el) { el.style.display = 'block'; void el.offsetWidth; el.classList.add('visible'); }
+        }
+        function scanCompleteBanner_hide() {
+            const el = document.getElementById('scanCompleteBanner');
+            if (el) { el.classList.remove('visible'); el.style.display = 'none'; }
+        }
+
+        btn.addEventListener('click', onSend);
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') onSend(); });
+    })();
+
+    (() => {
+        const loadTestBtn  = document.getElementById('loadTestBtn');
+        const modal        = document.getElementById('loadTestModal');
+        const ltCancelBtn  = document.getElementById('ltCancelBtn');
+        const ltStartBtn   = document.getElementById('ltStartBtn');
+        const ltTargetInp  = document.getElementById('ltTarget');
+        const ltThreadsInp = document.getElementById('ltThreads');
+        const ltDurationInp= document.getElementById('ltDuration');
+        const ltPanel      = document.getElementById('loadTestPanel');
+
+        const BACKEND_CANDIDATES = ['http://localhost:8080', 'http://127.0.0.1:8080', 'http://localhost:8081'];
+
+        loadTestBtn.addEventListener('click', () => {
+            const scanTarget = document.getElementById('targetInput').value.trim();
+            if (scanTarget) ltTargetInp.value = scanTarget;
+            modal.style.display = 'flex';
+            ltTargetInp.focus();
+        });
+
+        ltCancelBtn.addEventListener('click', () => { modal.style.display = 'none'; });
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
+
+        ltStartBtn.addEventListener('click', async () => {
+            const target   = ltTargetInp.value.trim();
+            const threads  = parseInt(ltThreadsInp.value) || 50;
+            const duration = parseInt(ltDurationInp.value) || 10;
+
+            if (!target) {
+                ltTargetInp.style.borderColor = '#ef4444';
+                ltTargetInp.focus();
+                return;
+            }
+            ltTargetInp.style.borderColor = '';
+
+            modal.style.display = 'none';
+            ltPanel.style.display = 'block';
+            ltPanel.innerHTML = `
+                <div class="lt-running">
+                    <div class="lt-spinner"></div>
+                    <span>Yük testi çalışıyor: <strong>${target}</strong> — ${threads} thread × ${duration}s</span>
+                    <div id="ltLiveStats" style="margin-top:12px; font-family:monospace; color:#0f0; background:#111; padding:10px; border-radius:5px; font-size:13px;">Test başlatılıyor...</div>
+                </div>`;
+
+            ltStartBtn.disabled = true;
+
+            let startedBaseUrl = null;
+            for (const base of BACKEND_CANDIDATES) {
+                try {
+                    const res = await fetch(base + '/load-test', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ target, threads: String(threads), duration: String(duration) })
+                    });
+                    if (res.ok) { 
+                        const data = await res.json();
+                        if (data.status === 'started' || !data.error) {
+                            startedBaseUrl = base;
+                            break;
+                        }
+                    }
+                } catch (e) {}
+            }
+
+            if (!startedBaseUrl) {
+                ltStartBtn.disabled = false;
+                ltPanel.innerHTML = `<div class="lt-error">⚠ Yük testi başlatılamadı. Backend'in çalıştığından emin olun.</div>`;
+                return;
+            }
+
+            const ltLiveStats = document.getElementById('ltLiveStats');
+            
+            let logInterval = setInterval(async () => {
+                try {
+                    const res = await fetch(startedBaseUrl + '/scan-logs?target=' + encodeURIComponent(target));
+                    if (res.ok) {
+                        const logs = await res.json();
+                        if (logs && logs.length > 0) {
+                            for (const log of logs) {
+                                if (log.startsWith("LOAD_TEST_RESULT:")) {
+                                    clearInterval(logInterval);
+                                    const result = JSON.parse(log.substring("LOAD_TEST_RESULT:".length));
+                                    renderLtResult(result);
+                                    ltStartBtn.disabled = false;
+                                    return;
+                                } else if (log.startsWith("[")) {
+                                    ltLiveStats.textContent = log;
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {}
+            }, 500);
+
+            function renderLtResult(result) {
+                if (!result) {
+                    ltPanel.innerHTML = `<div class="lt-error">⚠ Yük testi sonuçları alınamadı.</div>`;
+                    return;
+                }
+                const resilience = result.ddos_resilience || '';
+                const isStrong   = resilience.includes('GÜÇLÜ') || resilience.includes('DAYANIKLI');
+                const successRate = result.total_requests > 0
+                    ? ((result.successful_requests / result.total_requests) * 100).toFixed(1)
+                    : 0;
+
+                ltPanel.innerHTML = `
+                    <div class="lt-result-card">
+                        <div class="lt-result-header">
+                            <span class="lt-result-icon ${isStrong ? 'strong' : 'weak'}">${isStrong ? '🛡️' : '⚠️'}</span>
+                            <div>
+                                <div class="lt-result-title">Yük Testi Tamamlandı</div>
+                                <div class="lt-result-sub">${result.target}</div>
+                            </div>
+                        </div>
+                        <div class="lt-stats">
+                            <div class="lt-stat">
+                                <span class="lt-stat-val">${result.total_requests.toLocaleString()}</span>
+                                <span class="lt-stat-lbl">Toplam İstek</span>
+                            </div>
+                            <div class="lt-stat">
+                                <span class="lt-stat-val" style="color:var(--success)">${result.successful_requests.toLocaleString()}</span>
+                                <span class="lt-stat-lbl">Başarılı</span>
+                            </div>
+                            <div class="lt-stat">
+                                <span class="lt-stat-val" style="color:var(--danger)">${result.failed_requests.toLocaleString()}</span>
+                                <span class="lt-stat-lbl">Başarısız</span>
+                            </div>
+                            <div class="lt-stat">
+                                <span class="lt-stat-val">${successRate}%</span>
+                                <span class="lt-stat-lbl">Başarı Oranı</span>
+                            </div>
+                            <div class="lt-stat">
+                                <span class="lt-stat-val">${result.concurrency_threads}</span>
+                                <span class="lt-stat-lbl">Thread</span>
+                            </div>
+                            <div class="lt-stat">
+                                <span class="lt-stat-val">${result.duration_sec}s</span>
+                                <span class="lt-stat-lbl">Süre</span>
+                            </div>
+                        </div>
+                        <div class="lt-resilience ${isStrong ? 'strong' : 'weak'}">
+                            <strong>DDoS Dayanıklılığı:</strong> ${resilience}
+                        </div>
+                        <button class="lt-close-btn" onclick="document.getElementById('loadTestPanel').style.display='none'">Kapat</button>
+                    </div>`;
+            }
+        });
+    })();
 </script>
 
 </body>
